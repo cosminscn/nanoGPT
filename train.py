@@ -29,6 +29,71 @@ from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
 
+import wandb
+
+
+@torch.no_grad()
+def evaluate_key_value_similarity_first_layer(model, dataloader, wandb, wandb_log=True, iter_num=0):
+    model.eval()
+    similarity_sums = 0.0
+    total_pairs = 0
+    
+    # Instead of collecting all values, we'll maintain running statistics
+    # and sample a smaller subset for the histogram
+    MAX_HISTOGRAM_SAMPLES = 10000  # Adjust this number based on your needs
+    sampled_similarities = []
+    
+    from functools import partial
+    
+    for k in range(eval_iters):
+        inputs, _ = dataloader('val')
+        
+        # Forward pass through the model
+        logits, _ = model(inputs)
+        
+        # Get key-value similarity for the first layer only
+        first_layer = model.transformer.h[0].attn
+        if hasattr(first_layer, 'get_key_value_similarity'):
+            similarity = first_layer.get_key_value_similarity()
+            similarity_sums += torch.sum(torch.abs(similarity)).item()
+            total_pairs += similarity.numel()
+            
+            # Sample values for histogram
+            if len(sampled_similarities) < MAX_HISTOGRAM_SAMPLES:
+                # Flatten and convert to numpy
+                flat_similarities = similarity.cpu().numpy().flatten()
+                
+                # Calculate how many more samples we need
+                samples_needed = MAX_HISTOGRAM_SAMPLES - len(sampled_similarities)
+                
+                # If we have more values than we need, randomly sample
+                if len(flat_similarities) > samples_needed:
+                    indices = np.random.choice(len(flat_similarities), samples_needed, replace=False)
+                    sampled_similarities.extend(flat_similarities[indices])
+                else:
+                    # If we have fewer values than needed, take all of them
+                    sampled_similarities.extend(flat_similarities)
+
+    avg_similarity = similarity_sums / total_pairs
+
+    l = {
+        "iter": iter_num,
+        "avg_key_value_similarity_first_layer": avg_similarity,
+        "total_pairs": total_pairs,
+        "key_value_similarity_histogram": wandb.Histogram(sampled_similarities),
+        # Add additional statistical measures
+        "key_value_similarity_min": np.min(sampled_similarities),
+        "key_value_similarity_max": np.max(sampled_similarities),
+        "key_value_similarity_std": np.std(sampled_similarities),
+        "key_value_similarity_median": np.median(sampled_similarities),
+    }
+    import pprint; pprint.pprint(l)
+    
+    # Log to Weights & Biases
+    wandb.log(l)
+
+    model.train()  # Set the model back to training mode
+
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O
@@ -253,7 +318,7 @@ local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
 while True:
-
+    print(f"iter_num: {iter_num}")
     # determine and set the learning rate for this iteration
     lr = get_lr(iter_num) if decay_lr else learning_rate
     for param_group in optimizer.param_groups:
@@ -271,6 +336,8 @@ while True:
                 "lr": lr,
                 "mfu": running_mfu*100, # convert to percentage
             })
+            evaluate_key_value_similarity_first_layer(model, get_batch,  wandb, wandb_log=True, iter_num=iter_num)
+
         if losses['val'] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses['val']
             if iter_num > 0:

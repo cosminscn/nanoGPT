@@ -41,6 +41,7 @@ class CausalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
+        self.expose_kv = config.expose_kv
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
@@ -57,6 +58,9 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        if self.expose_kv:
+            self.last_keys = k  # Shape: (B, nh, T, hs)
+            self.last_values = v  # Shape: (B, nh, T, hs)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
@@ -74,6 +78,32 @@ class CausalSelfAttention(nn.Module):
         # output projection
         y = self.resid_dropout(self.c_proj(y))
         return y
+
+    def get_key_value_similarity(self):
+        """
+        Computes the similarity between keys and values to evaluate if similar keys have similar values.
+        Returns:
+            pairwise_similarity: A tensor representing the difference between key and value distances.
+        """
+        #import time
+        #print(f"Here at timestamp: {time.time()}")
+        if not hasattr(self, 'last_keys') or not hasattr(self, 'last_values'):
+            raise ValueError("Keys and values are not yet computed. Run a forward pass first.")
+
+        # Flatten keys and values into (B * nh, T, hs)
+        keys = self.last_keys.reshape(-1, self.last_keys.shape[2], self.last_keys.shape[3])
+        values = self.last_values.reshape(-1, self.last_values.shape[2], self.last_values.shape[3])
+
+        # Compute pairwise distances between keys and values
+        key_distances = torch.cdist(keys, keys, p=2)  # (B * nh, T, T)
+        value_distances = torch.cdist(values, values, p=2)  # (B * nh, T, T)
+
+        # Compute difference between key and value distances
+        pairwise_similarity = key_distances - value_distances
+        #print(f"Done at timestamp {time.time()}")
+        return pairwise_similarity
+
+
 
 class MLP(nn.Module):
 
@@ -114,6 +144,7 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+    expose_kv: bool = True
 
 class GPT(nn.Module):
 

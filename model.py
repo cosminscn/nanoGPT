@@ -140,10 +140,27 @@ class CausalSelfAttention(nn.Module):
         # Compute the squared difference between key and value similarities
         # This penalizes when similar keys don't have similar values
         sim_diff = (key_sim - value_sim).pow(2)
+        # TODO(cosmin) what penalty should we use here?
 
         reg_loss = sim_diff.mean()
 
-        return reg_loss
+        # TODO(cosmin): add for all the layer
+        # TODO(cosmin): add the positive side and negative side as returned losses
+        # TODO(cosmin): across the layers???
+        # - other examples in the batch are negatives
+        # TODO(cosmin): smallest coeficient for the regularization loss that's 
+        
+        # similar keys with different values
+        # - measure
+
+        # compute the positive side of (key_sim - value_sim)
+        positive_side = F.relu(key_sim - value_sim)
+        # compute the negative side of (key_sim - value_sim)
+        negative_side = F.relu(-(key_sim - value_sim))
+        positive_side_loss = positive_side.mean()
+        negative_side_loss = negative_side.mean()
+        
+        return reg_loss, positive_side_loss, negative_side_loss
 
 
 

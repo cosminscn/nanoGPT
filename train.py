@@ -371,7 +371,7 @@ while True:
             # looking at the source of that context manager, it just toggles this variable
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
-            kv_reg_weight = 1
+            kv_reg_weight = 0
             logits, loss = model(X, Y)
             
             middle_layer = model.transformer.h[len(model.transformer.h)//2].attn

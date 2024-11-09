@@ -4,7 +4,7 @@
 out_dir = 'out-shakespeare-char'
 eval_interval = 250 # keep frequent because we'll overfit
 #eval_interval = 2
-#eval_iters = 200
+eval_iters = 200
 log_interval = 10 # don't print too too often
 #log_interval = 1
 

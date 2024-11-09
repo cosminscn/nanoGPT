@@ -283,12 +283,17 @@ def estimate_loss():
     model.eval()
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
+        reg_losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
             X, Y = get_batch(split)
             with ctx:
                 logits, loss = model(X, Y)
+                middle_layer = model.transformer.h[len(model.transformer.h)//2].attn
+                reg_loss = middle_layer.get_key_value_regularization()
             losses[k] = loss.item()
+            reg_losses[k] = reg_loss.item()
         out[split] = losses.mean()
+        out[f"{split}_reg"] = reg_losses.mean()
     model.train()
     return out
 
@@ -327,16 +332,18 @@ while True:
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
         losses = estimate_loss()
-        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        print(f"step {iter_num}: train loss {losses['train']:.4f}, train reg loss {losses['train_reg']:.4f}, val loss {losses['val']:.4f}, val reg loss {losses['val_reg']:.4f}")
         if wandb_log:
             wandb.log({
                 "iter": iter_num,
                 "train/loss": losses['train'],
+                "train/reg_loss": losses['train_reg'],
                 "val/loss": losses['val'],
+                "val/reg_loss": losses['val_reg'],
                 "lr": lr,
                 "mfu": running_mfu*100, # convert to percentage
             })
-            evaluate_key_value_similarity_first_layer(model, get_batch,  wandb, wandb_log=True, iter_num=iter_num)
+            #evaluate_key_value_similarity_first_layer(model, get_batch,  wandb, wandb_log=True, iter_num=iter_num)
 
         if losses['val'] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses['val']
@@ -364,8 +371,15 @@ while True:
             # looking at the source of that context manager, it just toggles this variable
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
+            kv_reg_weight = 1
             logits, loss = model(X, Y)
-            loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
+            
+            middle_layer = model.transformer.h[len(model.transformer.h)//2].attn
+            reg_loss = middle_layer.get_key_value_regularization()
+            total_loss = loss + kv_reg_weight * reg_loss
+
+            total_loss = total_loss / gradient_accumulation_steps
+            loss = total_loss
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = get_batch('train')
         # backward pass, with gradient scaling if training in fp16

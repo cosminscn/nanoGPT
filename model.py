@@ -103,6 +103,48 @@ class CausalSelfAttention(nn.Module):
         #print(f"Done at timestamp {time.time()}")
         return pairwise_similarity
 
+    def get_key_value_regularization(self):
+        """
+        Computes regularization to encourage similar keys to have similar values.
+        Returns:
+            reg_loss: Regularization loss term penalizing when key similarity doesn't match value similarity
+        """
+        # Get the keys and values from last forward pass
+        if not hasattr(self, 'last_keys') or not hasattr(self, 'last_values'):
+            raise ValueError("Keys and values not computed. Run forward pass first.")
+
+        # Reshape keys and values: (B, nh, T, hs) -> (B * nh, T, hs)
+        keys = self.last_keys.contiguous().reshape(-1, self.last_keys.size(2), self.last_keys.size(3))
+        values = self.last_values.contiguous().reshape(-1, self.last_values.size(2), self.last_values.size(3))
+
+        # Normalize keys and values to unit length along hidden dimension
+        keys_norm = F.normalize(keys, p=2, dim=-1)
+        values_norm = F.normalize(values, p=2, dim=-1)
+
+        # Compute pairwise similarities: (B * nh, T, T)
+        key_sim = torch.bmm(keys_norm, keys_norm.transpose(1, 2))
+        value_sim = torch.bmm(values_norm, values_norm.transpose(1, 2))
+
+        # Create mask to zero out diagonal
+        T = keys.size(1)
+        mask = torch.ones_like(key_sim)
+        mask[:, range(T), range(T)] = 0
+
+        # Apply mask to both similarities
+        key_sim = key_sim * mask
+        value_sim = value_sim * mask
+
+        # Optional: Only consider cases where keys are similar (positive similarity)
+        key_sim = F.relu(key_sim)
+
+        # Compute the squared difference between key and value similarities
+        # This penalizes when similar keys don't have similar values
+        sim_diff = (key_sim - value_sim).pow(2)
+
+        reg_loss = sim_diff.mean()
+
+        return reg_loss
+
 
 
 class MLP(nn.Module):

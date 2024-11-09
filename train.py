@@ -284,16 +284,22 @@ def estimate_loss():
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
         reg_losses = torch.zeros(eval_iters)
+        positive_side_losses = torch.zeros(eval_iters)
+        negative_side_losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
             X, Y = get_batch(split)
             with ctx:
                 logits, loss = model(X, Y)
                 middle_layer = model.transformer.h[len(model.transformer.h)//2].attn
-                reg_loss = middle_layer.get_key_value_regularization()
+                reg_loss, positive_side_loss, negative_side_loss = middle_layer.get_key_value_regularization()
             losses[k] = loss.item()
             reg_losses[k] = reg_loss.item()
+            positive_side_losses[k] = positive_side_loss.item()
+            negative_side_losses[k] = negative_side_loss.item()
         out[split] = losses.mean()
         out[f"{split}_reg"] = reg_losses.mean()
+        out[f"{split}_positive_side_loss"] = positive_side_losses.mean()
+        out[f"{split}_negative_side_loss"] = negative_side_losses.mean()
     model.train()
     return out
 
@@ -340,10 +346,11 @@ while True:
                 "train/reg_loss": losses['train_reg'],
                 "val/loss": losses['val'],
                 "val/reg_loss": losses['val_reg'],
+                "val/positive_side_loss": losses['val_positive_side_loss'],
+                "val/negative_side_loss": losses['val_negative_side_loss'],
                 "lr": lr,
                 "mfu": running_mfu*100, # convert to percentage
             })
-            #evaluate_key_value_similarity_first_layer(model, get_batch,  wandb, wandb_log=True, iter_num=iter_num)
 
         if losses['val'] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses['val']
@@ -375,7 +382,7 @@ while True:
             logits, loss = model(X, Y)
             
             middle_layer = model.transformer.h[len(model.transformer.h)//2].attn
-            reg_loss = middle_layer.get_key_value_regularization()
+            reg_loss, positive_side_loss, negative_side_loss = middle_layer.get_key_value_regularization()
             total_loss = loss + kv_reg_weight * reg_loss
 
             total_loss = total_loss / gradient_accumulation_steps

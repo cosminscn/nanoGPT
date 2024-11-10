@@ -387,7 +387,7 @@ while True:
             
             if 'reg_loss' in output:
                 reg_loss = output['reg_loss']
-                total_loss = loss + config.reg_coef * reg_loss
+                total_loss = loss + config['reg_coef'] * reg_loss
             else:
                 total_loss = loss
 

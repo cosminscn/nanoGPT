@@ -131,6 +131,7 @@ decay_lr = True # whether to decay the learning rate
 warmup_iters = 2000 # how many steps to warm up for
 lr_decay_iters = 600000 # should be ~= max_iters per Chinchilla
 min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
+reg_coef = 1.0
 # DDP settings
 backend = 'nccl' # 'nccl', 'gloo', etc.
 # system
@@ -380,14 +381,13 @@ while True:
             # looking at the source of that context manager, it just toggles this variable
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
-            kv_reg_weight = 1.0
             output = model(X, Y)
             logits = output['logits']
             loss = output['loss']
             
             if 'reg_loss' in output:
                 reg_loss = output['reg_loss']
-                total_loss = loss + kv_reg_weight * reg_loss
+                total_loss = loss + config.reg_coef * reg_loss
             else:
                 total_loss = loss
 

@@ -11,10 +11,6 @@ log_interval = 10 # don't print too too often
 # we expect to overfit on this small dataset, so only save when val improves
 always_save_checkpoint = False
 
-#wandb_log = False # override via command line if you like
-wandb_log = True
-wandb_project = 'shakespeare-char'
-wandb_run_name = 'mini-gpt'
 
 dataset = 'shakespeare_char'
 gradient_accumulation_steps = 1
@@ -32,6 +28,7 @@ max_iters = 5000
 lr_decay_iters = 5000 # make equal to max_iters usually
 min_lr = 1e-4 # learning_rate / 10 usually
 beta2 = 0.99 # make a bit bigger because number of tokens per iter is small
+reg_coef = 1.0
 
 warmup_iters = 100 # not super necessary potentially
 #warmup_iters = 0
@@ -39,3 +36,8 @@ warmup_iters = 100 # not super necessary potentially
 # on macbook also add
 #device = 'cpu'  # run on cpu only
 #compile = False # do not torch compile the model
+
+#wandb_log = False # override via command line if you like
+wandb_log = True
+wandb_project = 'shakespeare-char'
+wandb_run_name = f'mini-gpt-char-all-layer-reg-{reg_coef}'

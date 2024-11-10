@@ -79,88 +79,64 @@ class CausalSelfAttention(nn.Module):
         y = self.resid_dropout(self.c_proj(y))
         return y
 
-    def get_key_value_similarity(self):
-        """
-        Computes the similarity between keys and values to evaluate if similar keys have similar values.
-        Returns:
-            pairwise_similarity: A tensor representing the difference between key and value distances.
-        """
-        #import time
-        #print(f"Here at timestamp: {time.time()}")
-        if not hasattr(self, 'last_keys') or not hasattr(self, 'last_values'):
-            raise ValueError("Keys and values are not yet computed. Run a forward pass first.")
 
-        # Flatten keys and values into (B * nh, T, hs)
-        keys = self.last_keys.reshape(-1, self.last_keys.shape[2], self.last_keys.shape[3])
-        values = self.last_values.reshape(-1, self.last_values.shape[2], self.last_values.shape[3])
+def get_key_value_regularization(keys, values):
+    """
+    Computes regularization to encourage similar keys to have similar values.
+    Args:
+        keys: Tensor of shape (B, nh, T, hs) containing attention keys
+        values: Tensor of shape (B, nh, T, hs) containing attention values
+    Returns:
+        reg_loss: Regularization loss term penalizing when key similarity doesn't match value similarity
+    """
+    # Reshape keys and values: (B, nh, T, hs) -> (B * nh, T, hs)
+    keys = keys.contiguous().reshape(-1, keys.size(2), keys.size(3))
+    values = values.contiguous().reshape(-1, values.size(2), values.size(3))
 
-        # Compute pairwise distances between keys and values
-        key_distances = torch.cdist(keys, keys, p=2)  # (B * nh, T, T)
-        value_distances = torch.cdist(values, values, p=2)  # (B * nh, T, T)
+    # Normalize keys and values to unit length along hidden dimension
+    keys_norm = F.normalize(keys, p=2, dim=-1)
+    values_norm = F.normalize(values, p=2, dim=-1)
 
-        # Compute difference between key and value distances
-        pairwise_similarity = key_distances - value_distances
-        #print(f"Done at timestamp {time.time()}")
-        return pairwise_similarity
+    # Compute pairwise similarities: (B * nh, T, T)
+    key_sim = torch.bmm(keys_norm, keys_norm.transpose(1, 2))
+    value_sim = torch.bmm(values_norm, values_norm.transpose(1, 2))
 
-    def get_key_value_regularization(self):
-        """
-        Computes regularization to encourage similar keys to have similar values.
-        Returns:
-            reg_loss: Regularization loss term penalizing when key similarity doesn't match value similarity
-        """
-        # Get the keys and values from last forward pass
-        if not hasattr(self, 'last_keys') or not hasattr(self, 'last_values'):
-            raise ValueError("Keys and values not computed. Run forward pass first.")
+    # Create mask to zero out diagonal
+    T = keys.size(1)
+    mask = torch.ones_like(key_sim)
+    mask[:, range(T), range(T)] = 0
 
-        # Reshape keys and values: (B, nh, T, hs) -> (B * nh, T, hs)
-        keys = self.last_keys.contiguous().reshape(-1, self.last_keys.size(2), self.last_keys.size(3))
-        values = self.last_values.contiguous().reshape(-1, self.last_values.size(2), self.last_values.size(3))
+    # Apply mask to both similarities
+    key_sim = key_sim * mask
+    value_sim = value_sim * mask
 
-        # Normalize keys and values to unit length along hidden dimension
-        keys_norm = F.normalize(keys, p=2, dim=-1)
-        values_norm = F.normalize(values, p=2, dim=-1)
+    # Optional: Only consider cases where keys are similar (positive similarity)
+    key_sim = F.relu(key_sim)
 
-        # Compute pairwise similarities: (B * nh, T, T)
-        key_sim = torch.bmm(keys_norm, keys_norm.transpose(1, 2))
-        value_sim = torch.bmm(values_norm, values_norm.transpose(1, 2))
+    # Compute the squared difference between key and value similarities
+    # This penalizes when similar keys don't have similar values
+    sim_diff = (key_sim - value_sim).pow(2)
+    # TODO(cosmin) what penalty should we use here?
 
-        # Create mask to zero out diagonal
-        T = keys.size(1)
-        mask = torch.ones_like(key_sim)
-        mask[:, range(T), range(T)] = 0
+    reg_loss = sim_diff.mean()
 
-        # Apply mask to both similarities
-        key_sim = key_sim * mask
-        value_sim = value_sim * mask
+    # TODO(cosmin): add for all the layer
+    # TODO(cosmin): add the positive side and negative side as returned losses
+    # TODO(cosmin): across the layers???
+    # - other examples in the batch are negatives
+    # TODO(cosmin): smallest coeficient for the regularization loss that's 
+    
+    # similar keys with different values
+    # - measure
 
-        # Optional: Only consider cases where keys are similar (positive similarity)
-        key_sim = F.relu(key_sim)
-
-        # Compute the squared difference between key and value similarities
-        # This penalizes when similar keys don't have similar values
-        sim_diff = (key_sim - value_sim).pow(2)
-        # TODO(cosmin) what penalty should we use here?
-
-        reg_loss = sim_diff.mean()
-
-        # TODO(cosmin): add for all the layer
-        # TODO(cosmin): add the positive side and negative side as returned losses
-        # TODO(cosmin): across the layers???
-        # - other examples in the batch are negatives
-        # TODO(cosmin): smallest coeficient for the regularization loss that's 
-        
-        # similar keys with different values
-        # - measure
-
-        # compute the positive side of (key_sim - value_sim)
-        positive_side = F.relu(key_sim - value_sim)
-        # compute the negative side of (key_sim - value_sim)
-        negative_side = F.relu(-(key_sim - value_sim))
-        positive_side_loss = positive_side.mean()
-        negative_side_loss = negative_side.mean()
-        
-        return reg_loss, positive_side_loss, negative_side_loss
+    # compute the positive side of (key_sim - value_sim)
+    positive_side = F.relu(key_sim - value_sim)
+    # compute the negative side of (key_sim - value_sim)
+    negative_side = F.relu(-(key_sim - value_sim))
+    positive_side_loss = positive_side.mean()
+    negative_side_loss = negative_side.mean()
+    
+    return reg_loss, positive_side_loss, negative_side_loss
 
 
 
@@ -275,12 +251,28 @@ class GPT(nn.Module):
             # if we are given some desired targets also calculate the loss
             logits = self.lm_head(x)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            ret_dict = {
+                'logits': logits,
+                'loss': loss
+            }
+            if self.config.expose_kv:
+                ret_dict[f'reg_loss'] = []
+                ret_dict[f'positive_side_loss'] = []
+                ret_dict[f'negative_side_loss'] = []
+                for layer in self.transformer.h:
+                    reg_loss, positive_side_loss, negative_side_loss = layer.attn.get_key_value_regularization(layer.attn.last_keys, layer.attn.last_values)
+                    ret_dict[f'reg_loss'].append(reg_loss)
+                    ret_dict[f'positive_side_loss'].append(positive_side_loss)
+                    ret_dict[f'negative_side_loss'].append(negative_side_loss)
+                ret_dict[f'reg_loss'] = torch.stack(ret_dict[f'reg_loss']).mean()
+                ret_dict[f'positive_side_loss'] = torch.stack(ret_dict[f'positive_side_loss']).mean()
+                ret_dict[f'negative_side_loss'] = torch.stack(ret_dict[f'negative_side_loss']).mean()
+            return ret_dict
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
             loss = None
-
-        return logits, loss
+            return {'logits': logits, 'loss': loss}
 
     def crop_block_size(self, block_size):
         # model surgery to decrease the block size if necessary
@@ -403,7 +395,8 @@ class GPT(nn.Module):
             # if the sequence context is growing too long we must crop it at block_size
             idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
-            logits, _ = self(idx_cond)
+            #logits, _ = self(idx_cond)
+            logits = self(idx_cond)['logits']
             # pluck the logits at the final step and scale by desired temperature
             logits = logits[:, -1, :] / temperature
             # optionally crop the logits to only the top k options

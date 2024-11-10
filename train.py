@@ -289,9 +289,11 @@ def estimate_loss():
         for k in range(eval_iters):
             X, Y = get_batch(split)
             with ctx:
-                logits, loss = model(X, Y)
-                middle_layer = model.transformer.h[len(model.transformer.h)//2].attn
-                reg_loss, positive_side_loss, negative_side_loss = middle_layer.get_key_value_regularization()
+                outputs = model(X, Y)
+                loss = outputs['loss']
+                reg_loss = outputs['reg_loss']
+                positive_side_loss = outputs['positive_side_loss']
+                negative_side_loss = outputs['negative_side_loss']
             losses[k] = loss.item()
             reg_losses[k] = reg_loss.item()
             positive_side_losses[k] = positive_side_loss.item()

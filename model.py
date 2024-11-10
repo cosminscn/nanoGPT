@@ -260,7 +260,7 @@ class GPT(nn.Module):
                 ret_dict[f'positive_side_loss'] = []
                 ret_dict[f'negative_side_loss'] = []
                 for layer in self.transformer.h:
-                    reg_loss, positive_side_loss, negative_side_loss = layer.attn.get_key_value_regularization(layer.attn.last_keys, layer.attn.last_values)
+                    reg_loss, positive_side_loss, negative_side_loss = get_key_value_regularization(layer.attn.last_keys, layer.attn.last_values)
                     ret_dict[f'reg_loss'].append(reg_loss)
                     ret_dict[f'positive_side_loss'].append(positive_side_loss)
                     ret_dict[f'negative_side_loss'].append(negative_side_loss)
